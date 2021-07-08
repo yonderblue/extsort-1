@@ -11,14 +11,14 @@ type memBuffer struct {
 }
 
 func (b *memBuffer) Append(key, val []byte) {
-	ent := fetchEntry(len(key), len(val))
-
-	n := copy(ent.data, key)
-	copy(ent.data[n:], val)
+	ent := fetchEntry()
+	ent.keyLen = len(key)
+	ent.data.B = append(ent.data.B, key...)
+	ent.data.B = append(ent.data.B, val...)
 
 	b.ents = append(b.ents, ent)
 
-	b.size += len(ent.data)
+	b.size += len(ent.data.B)
 }
 
 func (b *memBuffer) ByteSize() int      { return b.size }
