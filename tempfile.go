@@ -40,7 +40,7 @@ func (t *tempWriter) Encode(ent *entry) error {
 	if err := t.encodeSize(ent.ValLen()); err != nil {
 		return err
 	}
-	if _, err := t.Write(ent.data); err != nil {
+	if _, err := t.Write(ent.data.B); err != nil {
 		return err
 	}
 	return nil
@@ -148,8 +148,9 @@ func (t *tempReader) ReadNext(section int) (*entry, error) {
 		return nil, err
 	}
 
-	ent := fetchEntry(int(ku), int(vu))
-	if _, err := io.ReadFull(r, ent.data); err != nil {
+	ent := fetchEntry()
+	ent.keyLen = int(ku)
+	if _, err := ent.data.ReadFrom(io.LimitReader(r, int64(ku+vu))); err != nil {
 		ent.Release()
 		return nil, err
 	}
