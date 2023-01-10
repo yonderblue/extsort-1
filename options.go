@@ -21,6 +21,10 @@ type Options struct {
 	// By default os.TempDir() is used.
 	WorkDir string
 
+	// Keep temporary files until Close.
+	// Default: Immediately remove temporary files.
+	KeepFiles bool
+
 	// Less defines the compare function.
 	// Default: bytes.Compare() < 0
 	Less Less

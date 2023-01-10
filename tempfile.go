@@ -4,33 +4,40 @@ import (
 	"bufio"
 	"encoding/binary"
 	"io"
-	"io/ioutil"
 	"os"
 )
 
 type tempWriter struct {
-	f *os.File
-	c compressedWriter
-	w *bufio.Writer
+	f        *os.File
+	c        compressedWriter
+	w        *bufio.Writer
+	keepFile bool
 
 	scratch []byte
 	offsets []int64
 	size    int64
 }
 
-func newTempWriter(dir string, compress Compression) (*tempWriter, error) {
-	f, err := ioutil.TempFile(dir, "extsort")
+func newTempWriter(dir string, compress Compression, keepFile bool) (_ *tempWriter, rerr error) {
+	f, err := os.CreateTemp(dir, "extsort")
 	if err != nil {
 		return nil, err
+	}
+	if !keepFile {
+		// immediately remove for less chance of orphaning.
+		if err := os.Remove(f.Name()); err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
 
 	c := compress.newWriter(f)
 	w := bufio.NewWriterSize(c, 1<<16) // 64k
-	return &tempWriter{f: f, c: c, w: w, scratch: make([]byte, binary.MaxVarintLen64)}, nil
+	return &tempWriter{f: f, c: c, w: w, scratch: make([]byte, binary.MaxVarintLen64), keepFile: keepFile}, nil
 }
 
-func (t *tempWriter) Name() string {
-	return t.f.Name()
+func (t *tempWriter) ReaderAt() io.ReaderAt {
+	return t.f
 }
 
 func (t *tempWriter) Encode(ent *entry) error {
@@ -79,8 +86,10 @@ func (t *tempWriter) Close() (err error) {
 	if e := t.f.Close(); e != nil {
 		err = e
 	}
-	if e := os.Remove(t.f.Name()); e != nil {
-		err = e
+	if t.keepFile {
+		if e := os.Remove(t.f.Name()); e != nil {
+			err = e
+		}
 	}
 	return
 }
@@ -100,28 +109,19 @@ func (t *tempWriter) Size() int64 {
 // --------------------------------------------------------------------
 
 type tempReader struct {
-	f *os.File
-
 	readers  []io.ReadCloser
 	sections []*bufio.Reader
 }
 
-func newTempReader(name string, offsets []int64, bufSize int, compress Compression) (*tempReader, error) {
-	f, err := os.Open(name)
-	if err != nil {
-		return nil, err
-	}
-
+func newTempReader(ra io.ReaderAt, offsets []int64, bufSize int, compress Compression) (*tempReader, error) {
 	r := &tempReader{
-		f: f,
-
 		readers:  make([]io.ReadCloser, 0, len(offsets)),
 		sections: make([]*bufio.Reader, 0, len(offsets)),
 	}
 	slimit := bufSize / (len(offsets) + 1)
 	offset := int64(0)
 	for _, next := range offsets {
-		crd, err := compress.newReader(io.NewSectionReader(r.f, offset, next-offset))
+		crd, err := compress.newReader(io.NewSectionReader(ra, offset, next-offset))
 		if err != nil {
 			_ = r.Close()
 			return nil, err
@@ -174,9 +174,6 @@ func (t *tempReader) Close() (err error) {
 		if e := crd.Close(); e != nil {
 			err = e
 		}
-	}
-	if e := t.f.Close(); e != nil {
-		err = e
 	}
 	return
 }
