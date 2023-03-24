@@ -4,10 +4,15 @@ import (
 	"container/heap"
 )
 
+type memBufferEntry struct {
+	i int
+	*entry
+}
+
 type memBuffer struct {
-	size int
-	ents []*entry
-	less Less
+	size    int
+	ents    []memBufferEntry
+	compare Compare
 }
 
 func (b *memBuffer) Append(key, val []byte) {
@@ -16,15 +21,23 @@ func (b *memBuffer) Append(key, val []byte) {
 	ent.data.B = append(ent.data.B, key...)
 	ent.data.B = append(ent.data.B, val...)
 
-	b.ents = append(b.ents, ent)
+	i := len(b.ents)
+	b.ents = append(b.ents, memBufferEntry{i, ent})
 
 	b.size += len(ent.data.B)
 }
 
-func (b *memBuffer) ByteSize() int      { return b.size }
-func (b *memBuffer) Len() int           { return len(b.ents) }
-func (b *memBuffer) Less(i, j int) bool { return b.less(b.ents[i].Key(), b.ents[j].Key()) }
-func (b *memBuffer) Swap(i, j int)      { b.ents[i], b.ents[j] = b.ents[j], b.ents[i] }
+func (b *memBuffer) ByteSize() int { return b.size }
+func (b *memBuffer) Len() int      { return len(b.ents) }
+func (b *memBuffer) Less(i, j int) bool {
+	ii, jj := b.ents[i], b.ents[j]
+	c := b.compare(ii.Key(), jj.Key())
+	if c != 0 {
+		return c < 0
+	}
+	return ii.i < jj.i
+}
+func (b *memBuffer) Swap(i, j int) { b.ents[i], b.ents[j] = b.ents[j], b.ents[i] }
 
 func (b *memBuffer) Reset() {
 	for _, e := range b.ents {
@@ -47,12 +60,19 @@ type heapItem struct {
 }
 
 type minHeap struct {
-	items []heapItem
-	less  Less
+	items   []heapItem
+	compare Compare
 }
 
-func (h *minHeap) Len() int           { return len(h.items) }
-func (h *minHeap) Less(i, j int) bool { return h.less(h.items[i].Key(), h.items[j].Key()) }
+func (h *minHeap) Len() int { return len(h.items) }
+func (h *minHeap) Less(i, j int) bool {
+	a, b := h.items[i], h.items[j]
+	c := h.compare(a.Key(), b.Key())
+	if c != 0 {
+		return c < 0
+	}
+	return a.section < b.section
+}
 func (h *minHeap) Swap(i, j int)      { h.items[i], h.items[j] = h.items[j], h.items[i] }
 func (h *minHeap) Push(x interface{}) { h.items = append(h.items, x.(heapItem)) }
 func (h *minHeap) Pop() interface{} {

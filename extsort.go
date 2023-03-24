@@ -1,6 +1,8 @@
 package extsort
 
-import "io"
+import (
+	"io"
+)
 
 // Sorter is responsible for sorting.
 type Sorter struct {
@@ -12,7 +14,7 @@ type Sorter struct {
 // New inits a sorter
 func New(opt *Options) *Sorter {
 	opt = opt.norm()
-	return &Sorter{opt: opt, buf: &memBuffer{less: opt.Less}}
+	return &Sorter{opt: opt, buf: &memBuffer{compare: opt.Compare}}
 }
 
 // Append appends a data chunk to the sorter.
@@ -71,19 +73,22 @@ func (s *Sorter) flush() error {
 		s.tw = tw
 	}
 
+	dedup := s.opt.dedup()
+
 	s.opt.Sort(s.buf)
 
-	var lastKey []byte // store last for de-duplication
-	for _, ent := range s.buf.ents {
-		if s.opt.Dedupe != nil {
-			key := ent.Key()
-			if lastKey != nil && s.opt.Dedupe(key, lastKey) {
+	for i := 0; i < len(s.buf.ents); i++ {
+		ent := s.buf.ents[i]
+
+		if i+1 < len(s.buf.ents) {
+			next := s.buf.ents[i+1]
+
+			if dedup(ent.Key(), next.Key()) {
 				continue
 			}
-			lastKey = key
 		}
 
-		if err := s.tw.Encode(ent); err != nil {
+		if err := s.tw.Encode(ent.entry); err != nil {
 			return err
 		}
 	}
@@ -103,9 +108,10 @@ type Iterator struct {
 	heap *minHeap
 
 	ent     *entry
-	lastKey []byte
+	nextEnt *entry
 	dedupe  Equal
 	err     error
+	nextOK  bool
 }
 
 func newIterator(ra io.ReaderAt, offsets []int64, opt *Options) (*Iterator, error) {
@@ -114,29 +120,36 @@ func newIterator(ra io.ReaderAt, offsets []int64, opt *Options) (*Iterator, erro
 		return nil, err
 	}
 
-	iter := &Iterator{tr: tr, heap: &minHeap{less: opt.Less}, dedupe: opt.Dedupe}
+	iter := &Iterator{tr: tr, heap: &minHeap{compare: opt.Compare}, dedupe: opt.dedup(), ent: fetchEntry()}
 	for i := 0; i < tr.NumSections(); i++ {
 		if err := iter.fillHeap(i); err != nil {
 			_ = tr.Close()
 			return nil, err
 		}
 	}
+
+	iter.nextOK = iter.next()
+
 	return iter, nil
 }
 
 // Next advances the iterator to the next item and returns true if successful.
 func (i *Iterator) Next() bool {
+	if !i.nextOK {
+		return false
+	}
+
+	copyEntry(i.ent, i.nextEnt)
+
 	for i.next() {
-		if i.dedupe != nil {
-			key := i.ent.Key()
-			if i.lastKey != nil && i.dedupe(key, i.lastKey) {
-				continue
-			}
-			i.lastKey = append(i.lastKey[:0], key...)
+		if i.dedupe(i.ent.Key(), i.nextEnt.Key()) {
+			copyEntry(i.ent, i.nextEnt)
+			continue
 		}
 		return true
 	}
-	return false
+	i.nextOK = false
+	return true
 }
 
 func (i *Iterator) next() bool {
@@ -154,8 +167,8 @@ func (i *Iterator) next() bool {
 		return false
 	}
 
-	prev := i.ent
-	i.ent = ent
+	prev := i.nextEnt
+	i.nextEnt = ent
 	if prev != nil {
 		prev.Release()
 	}
@@ -174,7 +187,7 @@ func (i *Iterator) Value() []byte {
 
 // Data returns the data at the current cursor position (alias for Key).
 func (i *Iterator) Data() []byte {
-	return i.Key()
+	return i.ent.Key()
 }
 
 // Err returns the error, if occurred.
@@ -184,6 +197,10 @@ func (i *Iterator) Err() error {
 
 // Close closes the iterator.
 func (i *Iterator) Close() error {
+	if i.nextEnt != nil {
+		i.nextEnt.Release()
+		i.nextEnt = nil
+	}
 	if i.ent != nil {
 		i.ent.Release()
 		i.ent = nil

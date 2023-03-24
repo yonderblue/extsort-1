@@ -15,6 +15,11 @@ func fetchEntry() *entry {
 	return &entry{entryPool.Get(), 0}
 }
 
+func copyEntry(dst, src *entry) {
+	dst.data.B = append(dst.data.B[:0], src.data.B...)
+	dst.keyLen = src.keyLen
+}
+
 func (e entry) Key() []byte {
 	return e.data.B[:e.keyLen]
 }
