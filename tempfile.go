@@ -97,8 +97,9 @@ func (t *tempWriter) Size() int64 {
 // --------------------------------------------------------------------
 
 type tempReader struct {
-	readers  []io.ReadCloser
-	sections []*bufio.Reader
+	readers       []io.ReadCloser
+	sections      []*bufio.Reader
+	limitedReader io.LimitedReader // here to avoid allocations
 }
 
 func newTempReader(ra io.ReaderAt, offsets []int64, bufSize int, compress Compression) (*tempReader, error) {
@@ -150,7 +151,9 @@ func (t *tempReader) ReadNext(section int) (*entry, error) {
 
 	ent := fetchEntry()
 	ent.keyLen = int(ku)
-	if _, err := ent.data.ReadFrom(io.LimitReader(r, int64(ku+vu))); err != nil {
+	t.limitedReader.R = r
+	t.limitedReader.N = int64(ku + vu)
+	if _, err := ent.data.ReadFrom(&t.limitedReader); err != nil {
 		ent.Release()
 		return nil, err
 	}
